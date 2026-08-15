@@ -5,6 +5,7 @@ from app.ai.preprocessing.cleaner import TextCleaner
 from app.ai.preprocessing.chunker import TextChunker
 from app.ai.embeddings.embedding_service import EmbeddingService
 from app.ai.vector_store.qdrant_service import QdrantService
+from app.services.jobs.job_service import JobService
 
 
 class ProcessingPipeline:
@@ -22,55 +23,120 @@ class ProcessingPipeline:
 
         self.qdrant_service = QdrantService()
 
+        self.job_service = JobService()
 
     def process_file(
         self,
         file_path: str,
         file_id: str,
+        job_id: str | None = None,
         page_number: int | None = None,
     ):
 
-        extension = Path(file_path).suffix.lower()
+        try:
 
-        extractor = ExtractorFactory.get_extractor(extension)
+            extension = Path(file_path).suffix.lower()
 
-        if extractor is None:
-            raise ValueError(
-                f"Unsupported file type: {extension}"
-            )
+            extractor = ExtractorFactory.get_extractor(extension)
 
+            if extractor is None:
+                raise ValueError(
+                    f"Unsupported file type: {extension}"
+                )
 
-        text = extractor.extract_text(file_path)
+            # -----------------------------
+            # Extract Text
+            # -----------------------------
+            if job_id:
+                self.job_service.mark_processing(
+                    job_id,
+                    "Extracting text..."
+                )
 
+            text = extractor.extract_text(file_path)
 
-        cleaned_text = self.cleaner.clean(text)
+            # -----------------------------
+            # Clean Text
+            # -----------------------------
+            if job_id:
+                self.job_service.update_job(
+                    job_id,
+                    progress=20,
+                    message="Cleaning text..."
+                )
 
+            cleaned_text = self.cleaner.clean(text)
 
-        chunks = self.chunker.split_text(cleaned_text)
+            # -----------------------------
+            # Chunk Text
+            # -----------------------------
+            if job_id:
+                self.job_service.update_job(
+                    job_id,
+                    progress=40,
+                    message="Chunking document..."
+                )
 
+            chunks = self.chunker.split_text(cleaned_text)
 
-        for index, chunk in enumerate(chunks):
+            # -----------------------------
+            # Generate Embeddings
+            # -----------------------------
+            if job_id:
+                self.job_service.update_job(
+                    job_id,
+                    progress=60,
+                    message="Generating embeddings..."
+                )
 
-            embedding = self.embedding_service.create_embedding(
-                chunk
-            )
+            total_chunks = len(chunks)
 
+            for index, chunk in enumerate(chunks):
 
-            self.qdrant_service.upsert_embedding(
+                embedding = self.embedding_service.create_embedding(chunk)
 
-                embedding=embedding,
+                self.qdrant_service.upsert_embedding(
 
-                chunk_text=chunk,
+                    embedding=embedding,
 
-                metadata={
-                    "file_id": file_id,
-                    "file_name": Path(file_path).name,
-                    "chunk_index": index,
-                    "page_number": page_number,
-                    "token_count": len(chunk.split()),
-                    "embedding_model": "all-MiniLM-L6-v2"
-                }
-            )
+                    chunk_text=chunk,
 
+                    metadata={
+                        "file_id": file_id,
+                        "file_name": Path(file_path).name,
+                        "chunk_index": index,
+                        "page_number": page_number,
+                        "token_count": len(chunk.split()),
+                        "embedding_model": "all-MiniLM-L6-v2",
+                    },
+                )
 
-        return len(chunks)
+                if job_id:
+
+                    progress = 60 + int(
+                        ((index + 1) / total_chunks) * 35
+                    )
+
+                    self.job_service.update_job(
+                        job_id,
+                        progress=progress,
+                        message=f"Embedding chunk {index + 1}/{total_chunks}"
+                    )
+
+            # -----------------------------
+            # Completed
+            # -----------------------------
+            if job_id:
+                self.job_service.mark_completed(job_id)
+
+            return total_chunks
+
+        except Exception as e:
+
+            if job_id:
+                self.job_service.mark_failed(
+                    job_id,
+                    str(e)
+                )
+
+            raise

@@ -20,7 +20,7 @@ class FileRepository:
             .execute()
         )
 
-        return response.data
+        return response.data[0]
 
     # -----------------------------
     # Register Folder Metadata
@@ -34,7 +34,7 @@ class FileRepository:
             .execute()
         )
 
-        return response.data
+        return response.data[0]
 
     # -----------------------------
     # Get All Files
@@ -78,6 +78,24 @@ class FileRepository:
         )
 
         return response.data
+
+    # -----------------------------
+    # Get File By ID
+    # -----------------------------
+    def get_file_by_id(self, file_id: str):
+
+        response = (
+            self.db
+            .table("files")
+            .select("*")
+            .eq("id", file_id)
+            .execute()
+        )
+
+        if not response.data:
+            return None
+
+        return response.data[0]
 
     # -----------------------------
     # Delete File

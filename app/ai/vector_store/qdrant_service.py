@@ -1,10 +1,16 @@
+import uuid
+
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
     VectorParams,
     PointStruct,
+    Filter,
+    FilterSelector,
+    FieldCondition,
+    MatchValue,
+    PayloadSchemaType,
 )
-import uuid
 
 from app.core.config import settings
 
@@ -21,6 +27,9 @@ class QdrantService:
 
         self.collection_name = settings.QDRANT_COLLECTION_NAME
 
+    # --------------------------------------------------
+    # Create Collection
+    # --------------------------------------------------
     def create_collection(self):
 
         collections = self.client.get_collections()
@@ -46,6 +55,31 @@ class QdrantService:
 
             print("Collection already exists")
 
+        # Always ensure payload index exists
+        self.create_payload_indexes()
+
+    # --------------------------------------------------
+    # Create Payload Indexes
+    # --------------------------------------------------
+    def create_payload_indexes(self):
+
+        try:
+
+            self.client.create_payload_index(
+                collection_name=self.collection_name,
+                field_name="file_id",
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
+
+            print("Payload index created for file_id")
+
+        except Exception:
+
+            print("Payload index already exists")
+
+    # --------------------------------------------------
+    # Insert Embedding
+    # --------------------------------------------------
     def upsert_embedding(
         self,
         embedding: list[float],
@@ -69,6 +103,9 @@ class QdrantService:
 
         return point.id
 
+    # --------------------------------------------------
+    # Search
+    # --------------------------------------------------
     def search(
         self,
         query_embedding: list[float],
@@ -96,3 +133,39 @@ class QdrantService:
             )
 
         return output
+
+    # --------------------------------------------------
+    # Delete Embeddings for a File
+    # --------------------------------------------------
+    def delete_file_embeddings(
+        self,
+        file_id: str,
+    ):
+
+        records, _ = self.client.scroll(
+            collection_name=self.collection_name,
+            scroll_filter=Filter(
+            must=[
+                FieldCondition(
+                    key="file_id",
+                    match=MatchValue(value=file_id),
+                )
+            ]
+        ),
+        with_payload=False,
+        with_vectors=False,
+        limit=10000,
+        )
+
+        if not records:
+            print("No embeddings found.")
+            return
+
+        point_ids = [record.id for record in records]
+
+        self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=point_ids,
+        )
+
+        print(f"Deleted {len(point_ids)} embeddings.")
